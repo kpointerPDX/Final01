@@ -19,6 +19,7 @@ STAGNATION_LIMIT = 1                                                            
 ASPECT_LOCUS = 0.9                                                                                                      # Aspect ratio fuzziness parameter
 ASPECT_FWHM = 0.5                                                                                                       # Aspect ratio fuzziness parameter
 SIDES_FWHM = 2.5                                                                                                        # Sides count fuzziness parameter
+LOOK_FRAMES = 5
 FILTER_CONF = 0.01
 INVEST_CONF = 0.25
 GOAL_CONF = 0.5
@@ -82,14 +83,12 @@ def look(camIn):
         # cv.imshow("mask1", mask1)                                                                                       # DEBUG: lower HSV mask
         # cv.imshow("mask2", mask2)                                                                                       # DEBUG: upper HSV mask
         # cv.imshow("OR mask", mask)                                                                                      # DEBUG: combined HSV mask
-        cv.imshow("masked", masked)                                                                                     # DEBUG: HSV masked output
+        # cv.imshow("masked", masked)                                                                                     # DEBUG: HSV masked output
         # cv.imshow("Canny", boundaries)                                                                                  # DEBUG: edge detection output
         # cv.imshow("contours", contourField)                                                                             # DEBUG: contour output
         # cv.imshow("shape traces", traceField)                                                                           # DEBUG: traced shapes output
-        pass
-    # cv.imshow("goal locator", ARframe)                                                                                  # final "augmented reality" output
-    # time.sleep(0.5)
-    if bestConf > GOAL_CONF:
+        cv.imshow("goal locator", ARframe)                                                                              # final "augmented reality" output
+    if (not CAMERA_TEST) and (bestConf > GOAL_CONF):
         cv.imwrite("foundGoal.png", ARframe)
     return bestConf, bestRect
 
@@ -142,16 +141,17 @@ if __name__ == "__main__":
     cam = cv.VideoCapture(0)                                                                                            # instantiate cam feed
     cam.set(3, FEED_RES_W)                                                                                              # set feed resolution
     cam.set(4, FEED_RES_H)
-    lookStep = -1                                                                                                       # start at -1, proceed to 0
+    lookFrames = -1                                                                                                     # start at -1, proceed to 0
+    lookStep = -1
     lookCycle = ["turn left", "turn left", "turn right", "turn right", "turn right", "turn right", "turn left", "turn left", "forward", "forward"]
 
     loop = True                                                                                                         # boolean loop variable
     while loop:
-        frontDistance = sonar.read()
-        # print("sonar: " + str(frontDistance))
-        confidence, rectangle = look(cam)
-        time.sleep(1.0)
-        if not CAMERA_TEST:
+        frontDistance = sonar.read()                                                                                    # measure distance in front of robot
+        confidence, rectangle = look(cam)                                                                               # get goal confidence and location
+        lookFrames = (lookFrames + 1) % LOOK_FRAMES
+        if (not CAMERA_TEST) and ((confidence > GOAL_CONF) or (lookFrames == 0)):                                       # only move if NOT testing camera
+            time.sleep(1.0)
             if confidence > INVEST_CONF:
                 if confidence > GOAL_CONF:
                     print("GOAL FOUND!!!\nconfidence = %.3f" % confidence)
