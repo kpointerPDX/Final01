@@ -1,28 +1,36 @@
-import time
-import cv2 as cv
-import numpy as np
-from picrawler import Picrawler
-from robot_hat import Ultrasonic
-from robot_hat import Pin
+import time                                                                                                             # import time for sleep
+import cv2 as cv                                                                                                        # import openCV-contrib-python
+import numpy as np                                                                                                      # import numpy
+from picrawler import Picrawler                                                                                         # import mfg. fcns for robot
+from robot_hat import Ultrasonic                                                                                        # import mfg  fcns for sonar
+from robot_hat import Pin                                                                                               # import dependencies for mfg. fcns
 crawler = Picrawler([10, 11, 12, 4, 5, 6, 1, 2, 3, 7, 8, 9])                                                            # Instantiate robot [servo numbers]
-sonar = Ultrasonic(Pin("D2"), Pin("D3"))
+sonar = Ultrasonic(Pin("D2"), Pin("D3"))                                                                                # Instantiate sonar sensor
 
 
 #Global parameters:
-CAMERA_TEST = False
+CAMERA_TEST = False                                                                                                     # Toggles "cam test mode"--no movement
 SPEED = 100                                                                                                             # Crawler move speed (%)
 FEED_RES_W = 480                                                                                                        # Video feed resolution width
 FEED_RES_H = 360                                                                                                        # Video feed resolution height
-ARC_LENGTH_THRESHOLD = 50                                                                                               # Arc length threshold for filtering
-TRACE_ROUGHNESS_FACTOR = 0.10                                                                                           # Error factor for polygon tracing
-STAGNATION_LIMIT = 1                                                                                                    # Frames to "hold" last detected shape
-ASPECT_LOCUS = 0.9                                                                                                      # Aspect ratio fuzziness parameter
-ASPECT_FWHM = 0.5                                                                                                       # Aspect ratio fuzziness parameter
-SIDES_FWHM = 2.5                                                                                                        # Sides count fuzziness parameter
-LOOK_FRAMES = 5
-FILTER_CONF = 0.01
-INVEST_CONF = 0.25
-GOAL_CONF = 0.5
+LOWER_HSV1 = np.array([0, 128, 32])                                                                                     # lowerbounds for low-end HSV mask
+UPPER_HSV1 = np.array([8, 255, 255])                                                                                    # upperbounds for low-end HSV mask
+LOWER_HSV2 = np.array([164, 96, 32])                                                                                    # lowerbounds for high-end HSV mask
+UPPER_HSV2 = np.array([180, 255, 255])                                                                                  # upperbounds for high-end HSV mask
+ARC_LENGTH_THRESHOLD = 120                                                                                               # Arc length threshold for filtering
+TRACE_ROUGHNESS = 5
+ASPECT_LOCUS = 1.0                                                                                                      # Aspect ratio fuzziness center
+ASPECT_FWHM = 0.5                                                                                                       # Aspect ratio fuzziness width
+SIDES_LOCUS = 4.0                                                                                                       # Sides count fuzziness center
+SIDES_FWHM = 2.5                                                                                                        # Sides count fuzziness width
+COLOR_LOCUS = 0.0                                                                                                       # Color ratio fuzziness center
+COLOR_FWHM = 1.33                                                                                                       # Color ratio fuzziness width
+WAIT_FRAMES = 20
+MOVE_FRAMES = 25                                                                                                         # moves execute once per this many loops
+HOLD_TIME = 0.25                                                                                                        # delay time between ops
+FILTER_CONF = 0.01                                                                                                      # absolute minimum conf for recognition
+INVEST_CONF = 0.1                                                                                                       # conf to trigger investigation
+GOAL_CONF = 0.5                                                                                                         # conf to declare goal found
 
 
 def look(camIn):
@@ -30,30 +38,25 @@ def look(camIn):
     bestConf = 0.0
     ret, frame = camIn.read()                                                                                           # frame = source video frame image
     ARframe = frame.copy()                                                                                              # copy frame for final output
-    hsvFrame = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
-    hsvFrame = cv.GaussianBlur(hsvFrame, (51, 51), cv.BORDER_DEFAULT)
-    lowerHSV1 = np.array([0, 128, 32])                                                                                  # range values specifying HSV masks
-    upperHSV1 = np.array([8, 255, 255])
-    lowerHSV2 = np.array([164, 96, 32])
-    upperHSV2 = np.array([180, 255, 255])
-    mask1 = cv.inRange(hsvFrame, lowerHSV1, upperHSV1)                                                                  # HSV mask to cover the bottom hues
-    mask2 = cv.inRange(hsvFrame, lowerHSV2, upperHSV2)                                                                  # HSV mask to cover the top hues
+    hsvFrame = cv.GaussianBlur(frame, (9, 9), cv.BORDER_DEFAULT)
+    hsvFrame = cv.cvtColor(hsvFrame, cv.COLOR_BGR2HSV)
+    mask1 = cv.inRange(hsvFrame, LOWER_HSV1, UPPER_HSV1)                                                                # HSV mask to cover the bottom hues
+    mask2 = cv.inRange(hsvFrame, LOWER_HSV2, UPPER_HSV2)                                                                # HSV mask to cover the top hues
     mask = cv.bitwise_or(mask1, mask2)
     masked = cv.bitwise_and(frame, frame, mask=mask)                                                                    # masked frame image
-    masked = cv.GaussianBlur(masked, (51, 51), cv.BORDER_DEFAULT)
+    masked = cv.GaussianBlur(masked, (9, 9), cv.BORDER_DEFAULT)
     boundaries = cv.Canny(masked, 40, 60)                                                                               # edge detection
     contours, hierarchies = cv.findContours(boundaries, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)                           # convert edges to contours
     filteredContours = []
     for contour in contours:
         L = cv.arcLength(contour, True)                                                                                 # filter each contour by arcLength
         if L >= ARC_LENGTH_THRESHOLD:
-            newContour = cv.approxPolyDP(contour, int(L * TRACE_ROUGHNESS_FACTOR), True)                                # then simplify curve
+            newContour = cv.approxPolyDP(contour, int(TRACE_ROUGHNESS), True)                                           # then simplify curve
             if cv.arcLength(newContour, True) > ARC_LENGTH_THRESHOLD:
                 filteredContours.append(newContour)                                                                     # if still long enough: save contour
     contourField = np.zeros(frame.shape, dtype="uint8")                                                                 # new canvas for contours
     cv.drawContours(contourField, filteredContours, -1, (255, 0, 255), 2)
     traceField = np.zeros(frame.shape, dtype="uint8")                                                                   # new canvas for isolated shapes
-    nowLocated = 0                                                                                                         # found shapes counter
     for contour in filteredContours:
         if len(contour) > 1:
             sidesConf = fuzzifyNumSides(len(contour))
@@ -68,10 +71,14 @@ def look(camIn):
                 colorConf = fuzzifyColor(avgColor)
                 finalConfidence = iniConfidence * colorConf
                 if finalConfidence > INVEST_CONF and finalConfidence > bestConf:
-                    nowLocated += 1
+                    L = cv.arcLength(contour, True)
                     bestConf = finalConfidence
                     bestRect = (x, y, w, h)
                     cv.putText(traceField, str(L), (x + w, y + h), cv.FONT_HERSHEY_COMPLEX_SMALL, 1, (255, 255, 255), 2)  # put label on shape canvas
+                # if finalConfidence > GOAL_CONF:
+                #     print("FOUND!!! sides:%.3f" % sidesConf + "\taspect:%.3f" % aspectConf + "\tcolor:%.3f" % colorConf + "\tfinal:%.3f" % finalConfidence)
+                # else:
+                #     print("found... sides:%.3f" % sidesConf + "\taspect:%.3f" % aspectConf + "\tcolor:%.3f" % colorConf + "\tfinal:%.3f" % finalConfidence)
     if bestConf > INVEST_CONF:
         x, y, w, h = bestRect
         cv.rectangle(ARframe, (x, y), (x + w, y + h), (0, 0, 255), thickness=2)                                         # draw bounding rectangle on output
@@ -88,6 +95,8 @@ def look(camIn):
         # cv.imshow("contours", contourField)                                                                             # DEBUG: contour output
         # cv.imshow("shape traces", traceField)                                                                           # DEBUG: traced shapes output
         cv.imshow("goal locator", ARframe)                                                                              # final "augmented reality" output
+        pass                                                                                                            # in case all disabled
+    cv.imshow("goal locator", ARframe)
     if (not CAMERA_TEST) and (bestConf > GOAL_CONF):
         cv.imwrite("foundGoal.png", ARframe)
     return bestConf, bestRect
@@ -120,58 +129,70 @@ def fuzzifyNumSides(numIn):
         return 0.0
     elif n == 2:
         return 0.5
-    elif n == 3 or n == 4:
+    elif n == 3 or n == 4 or n == 5:
         return 1.0
     else:
-        return gaussian(n, 4, SIDES_FWHM, 'z')
+        return gaussian(n, SIDES_LOCUS, SIDES_FWHM, 'z')
 
 
-def fuzzifyColor(colorListIn):
-    b = colorListIn[0]
-    bConf = gaussian(b, 64, 128, 'z')
-    g = colorListIn[1]
-    gConf = gaussian(g, 64, 128, 'z')
-    r = colorListIn[2]
-    rConf = gaussian(r, 192, 128, 's')
-    finalConf = bConf * gConf * rConf
-    return finalConf
+def fuzzifyColor(colorListIn):                                                                                          # average g and b; check ratio to r
+    r = float(colorListIn[2])
+    g = float(colorListIn[1])
+    b = float(colorListIn[0])
+    # print("colors: %d" % r + ", %d" % g + ", %d" % b)
+    gb = (g + b) / 2.0
+    ratio = gb / r
+    # print("color ratio: %.3f" % ratio)
+    colorConf = gaussian(ratio, COLOR_LOCUS, COLOR_FWHM, 'z')
+    return colorConf
 
 
 if __name__ == "__main__":
     cam = cv.VideoCapture(0)                                                                                            # instantiate cam feed
     cam.set(3, FEED_RES_W)                                                                                              # set feed resolution
     cam.set(4, FEED_RES_H)
-    lookFrames = -1                                                                                                     # start at -1, proceed to 0
-    lookStep = -1
-    lookCycle = ["turn left", "turn left", "turn right", "turn right", "turn right", "turn right", "turn left", "turn left", "forward", "forward"]
+    confidence = 0.0
+    waitFrames = -1                                                                                                     # dictates when to wait
+    moveFrames = -1                                                                                                     # dictates when to look vs move
+    moveStep = -1                                                                                                       # dictates which movement to make
+    moveCycle = ["turn left", "turn left", "turn left",
+                 "turn right", "turn right", "turn right",
+                 "turn right", "turn right", "turn right",
+                 "turn left", "turn left", "turn left",
+                 "forward", "forward", "forward"]                                                                       # "search pattern" sequence
 
     loop = True                                                                                                         # boolean loop variable
     while loop:
         frontDistance = sonar.read()                                                                                    # measure distance in front of robot
-        confidence, rectangle = look(cam)                                                                               # get goal confidence and location
-        lookFrames = (lookFrames + 1) % LOOK_FRAMES
-        if (not CAMERA_TEST) and ((confidence > GOAL_CONF) or (lookFrames == 0)):                                       # only move if NOT testing camera
-            time.sleep(1.0)
-            if confidence > INVEST_CONF:
-                if confidence > GOAL_CONF:
+        # confidence, rectangle = look(cam)                                                                               # get goal confidence and location
+        # moveFrames = (moveFrames + 1) % MOVE_FRAMES                                                                     # look for X cycles; move for 1
+        # if (not CAMERA_TEST) and ((confidence > GOAL_CONF) or (moveFrames == 0)):                                       # only move if NOT testing camera
+        waitFrames = (waitFrames + 1) % WAIT_FRAMES
+        if (not CAMERA_TEST) and waitFrames == 0:                                                                                       # only move if NOT testing camera
+            if confidence > INVEST_CONF:                                                                                # if SOME confidence...
+                if confidence > GOAL_CONF:                                                                              # if ALOT of confidence: shout, sit, win
                     print("GOAL FOUND!!!\nconfidence = %.3f" % confidence)
-                    # crawler.do_action('dance', 1, SPEED)
+                    # crawler.do_action('dance', 1, SPEED)      # DO NOT UNCOMMENT! DANGEROUS!
                     crawler.do_action('sit', 1, SPEED)
                     loop = False
-                else:
-                    if frontDistance >= 10 or frontDistance < 0:
+                else:                                                                                                   # if POSSIBLE goal...
+                    if frontDistance >= 10 or frontDistance < 0:                                                        # ...and room in front, move forward
                         print("Possible goal found! Investigating...\nconfidence = %.3f" % confidence)
                         crawler.do_action("forward", 1, SPEED)
-                    else:
+                    else:                                                                                               # otherwise, stay and look some more.
                         print("Possible goal found! Waiting...\nconfidence = %.3f" % confidence)
-                    time.sleep(2.0)
+                        moveStep = -1                                                                                   # reset move cycle to initial position
+                    time.sleep(HOLD_TIME)
             else:
-                lookStep = (lookStep + 1) % len(lookCycle)
-                while lookCycle[lookStep] == "forward" and 0 <= frontDistance < 10:
-                    lookStep = (lookStep + 1) % len(lookCycle)
-                print("Goal not found...\nMovement step %d" % lookStep + ": " + lookCycle[lookStep])
-                crawler.do_action(lookCycle[lookStep], 1, SPEED)
-                time.sleep(2.0)
+                moveStep = (moveStep + 1) % len(moveCycle)                                                              # iterate through moveCycle
+                while moveCycle[moveStep] == "forward" and 0 <= frontDistance < 10:
+                    moveStep = (moveStep + 1) % len(moveCycle)
+                print("Goal not found...\nMovement step %d" % moveStep + ": " + moveCycle[moveStep])
+                crawler.do_action(moveCycle[moveStep], 1, SPEED)
+                # time.sleep(HOLD_TIME)
+
+            time.sleep(HOLD_TIME)                                                                                       # keep from moving faster than servos
+            confidence, rectangle = look(cam)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             loop = False
