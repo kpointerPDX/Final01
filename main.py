@@ -1,5 +1,4 @@
 import threading                                                                                                        # import threading for cam
-import time                                                                                                             # import time for sleep
 import cv2 as cv                                                                                                        # import openCV-contrib-python
 import numpy as np                                                                                                      # import numpy
 from picrawler import Picrawler                                                                                         # import mfg. fcns for robot
@@ -11,7 +10,6 @@ sonar = Ultrasonic(Pin("D2"), Pin("D3"))                                        
 
 #Global parameters:
 CAMERA_TEST = False                                                                                                     # Toggles "cam test mode"--no movement
-TIMERS = False                                                                                                          # Toggles timing major functions
 SPEED = 100                                                                                                             # Crawler move speed (%)
 FEED_RES_W = 480                                                                                                        # Video feed resolution width
 FEED_RES_H = 360                                                                                                        # Video feed resolution height
@@ -32,27 +30,23 @@ HOLD_TIME = 0.1                                                                 
 FILTER_CONF = 0.01                                                                                                      # absolute minimum conf for recognition
 INVEST_CONF = 0.1                                                                                                       # conf to trigger investigation
 GOAL_CONF = 0.5                                                                                                         # conf to declare goal found
-CONFIDENCE = 0.0
-LAST_CONF = 0.0
+CONFIDENCE = 0.0                                                                                                        # global confidence variable
 
 
 def look(camIn):
-    if TIMERS:
-        lStart = time.time()
-    bestRect = (0, 0, 0, 0)                                                                                             # DEPRECATED?
-    bestConf = 0.0
+    bestConf = 0.0                                                                                                      # best confidence container
     ret, frame = camIn.read()                                                                                           # frame = source video frame image
     ARframe = frame.copy()                                                                                              # copy frame for final output
-    hsvFrame = cv.GaussianBlur(frame, (9, 9), cv.BORDER_DEFAULT)
-    hsvFrame = cv.cvtColor(hsvFrame, cv.COLOR_BGR2HSV)
+    hsvFrame = cv.GaussianBlur(frame, (9, 9), cv.BORDER_DEFAULT)                                                        # blur frame copy
+    hsvFrame = cv.cvtColor(hsvFrame, cv.COLOR_BGR2HSV)                                                                  # convert copy to HSV
     mask1 = cv.inRange(hsvFrame, LOWER_HSV1, UPPER_HSV1)                                                                # HSV mask to cover the bottom hues
     mask2 = cv.inRange(hsvFrame, LOWER_HSV2, UPPER_HSV2)                                                                # HSV mask to cover the top hues
-    mask = cv.bitwise_or(mask1, mask2)
+    mask = cv.bitwise_or(mask1, mask2)                                                                                  # combine masks
     masked = cv.bitwise_and(frame, frame, mask=mask)                                                                    # masked frame image
-    masked = cv.GaussianBlur(masked, (9, 9), cv.BORDER_DEFAULT)
+    masked = cv.GaussianBlur(masked, (9, 9), cv.BORDER_DEFAULT)                                                         # blur new working image
     boundaries = cv.Canny(masked, 40, 60)                                                                               # edge detection
     contours, hierarchies = cv.findContours(boundaries, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)                           # convert edges to contours
-    filteredContours = []
+    filteredContours = []                                                                                               # instantiate empty list
     for contour in contours:
         L = cv.arcLength(contour, True)                                                                                 # filter each contour by arcLength
         if L >= ARC_LENGTH_THRESHOLD:
@@ -63,22 +57,22 @@ def look(camIn):
     cv.drawContours(contourField, filteredContours, -1, (255, 0, 255), 2)
     traceField = np.zeros(frame.shape, dtype="uint8")                                                                   # new canvas for isolated shapes
     for contour in filteredContours:
-        if len(contour) > 1:
-            sidesConf = fuzzifyNumSides(len(contour))
+        if len(contour) > 1:                                                                                            # filter out non-shapes
+            sidesConf = fuzzifyNumSides(len(contour))                                                                   # fuzzify number of sides
             cv.drawContours(traceField, [contour], 0, (255, 255, 255), 3)                                               # draw shape to shape canvas
             x, y, w, h, = cv.boundingRect(contour)                                                                      # get rectangle parameters
-            A = float(w)/float(h)
-            aspectConf = fuzzifyApsect(A)
-            iniConfidence = min(sidesConf, aspectConf)
-            if iniConfidence >= FILTER_CONF:
-                prospect = frame[y:y+h, x:x+w]
-                avgColor = (np.average(prospect[:, :, 0]), np.average(prospect[:, :, 1]), np.average(prospect[:, :, 2]))
-                colorConf = fuzzifyColor(avgColor)
-                finalConfidence = min(iniConfidence, colorConf)
-                if finalConfidence > INVEST_CONF and finalConfidence > bestConf:
-                    L = cv.arcLength(contour, True)
-                    bestConf = finalConfidence
-                    bestRect = (x, y, w, h)
+            A = float(w)/float(h)                                                                                       # get aspect ratio
+            aspectConf = fuzzifyApsect(A)                                                                               # fuzzify aspect ratio
+            iniConfidence = min(sidesConf, aspectConf)                                                                  # judge initial confidence
+            if iniConfidence >= FILTER_CONF:                                                                            # filter further by ini. conf.
+                prospect = frame[y:y+h, x:x+w]                                                                          # isolate region of interest
+                avgColor = (np.average(prospect[:, :, 0]), np.average(prospect[:, :, 1]), np.average(prospect[:, :, 2]))  # average color of crop
+                colorConf = fuzzifyColor(avgColor)                                                                      # fuzzify average color
+                finalConfidence = min(iniConfidence, colorConf)                                                         # judge final confidence
+                if finalConfidence > INVEST_CONF and finalConfidence > bestConf:                                        # proceed only if best so far
+                    L = cv.arcLength(contour, True)                                                                     # number of sides
+                    bestConf = finalConfidence                                                                          # save confidence
+                    bestRect = (x, y, w, h)                                                                             # save region info
                     cv.putText(traceField, str(L), (x + w, y + h), cv.FONT_HERSHEY_COMPLEX_SMALL, 1, (255, 255, 255), 2)  # put label on shape canvas
     if bestConf > INVEST_CONF:
         x, y, w, h = bestRect
@@ -105,18 +99,17 @@ def look(camIn):
         cv.imwrite("foundGoal.png", ARframe)
     global CONFIDENCE
     CONFIDENCE = bestConf
-    if TIMERS:
-        lStop = time.time()
-        print("look(): %.4f" % (lStop-lStart))
 
 
-def gaussian(xIn, locusIn, widthIn, shapeIn='g', maxIn=1.0):
+def gaussian(xIn, locusIn, widthIn, shapeIn='g', maxIn=1.0):                                                            # Gaussian func for fuzzifying
+    # Gaussian parameter variables:
     a = float(maxIn)
     b = float(locusIn)
     w = float(widthIn)
     x = float(xIn)
     result = 0.0
-    if (shapeIn == 's' and x >= b) or (shapeIn == 'z' and x <= b):                                                      # if s- or z-curve, first check if max
+    # if using s- or z-curve, first check to see if in maxed region:
+    if (shapeIn == 's' and x >= b) or (shapeIn == 'z' and x <= b):
         result = 1.0
     else:
         result = a * np.exp(-4.0 * np.log(2) * ((x - b) * (x - b)) / (w * w))                                           # gaussian function in terms of FWHM
@@ -126,8 +119,8 @@ def gaussian(xIn, locusIn, widthIn, shapeIn='g', maxIn=1.0):
 
 def fuzzifyApsect(aspectIn):                                                                                            # goal confidence from aspect ratio
     A = float(aspectIn)
-    if A > 1.0:
-        A = 1.0 / A
+    if A > 1.0:                                                                                                         # if A > 1, normalize
+        A = 1.0 / A                                                                                                     # (use inverse)
     return gaussian(A, ASPECT_LOCUS, ASPECT_FWHM, 's')
 
 
@@ -137,13 +130,13 @@ def fuzzifyNumSides(numIn):
         return 0.0
     elif n == 2:                                                                                                        # 2 sides is kinda sus
         return 0.5
-    elif 3 <= n <= 5:                                                                                                   # fine if within 1
+    elif 3 <= n <= 5:                                                                                                   # fine if within 3-5
         return 1.0
-    else:                                                                                                               # if more: Gaussian falloff
+    else:                                                                                                               # if greater: Gaussian falloff
         return gaussian(n, SIDES_LOCUS, SIDES_FWHM, 'z')
 
 
-def fuzzifyColor(colorListIn):                                                                                          # fuzzied var is ratio of avg(G,B) to R:
+def fuzzifyColor(colorListIn):                                                                                          # fuzzied var = ratio of avg(G,B) to R:
     r = float(colorListIn[2])
     g = float(colorListIn[1])
     b = float(colorListIn[0])
@@ -152,17 +145,12 @@ def fuzzifyColor(colorListIn):                                                  
     return gaussian(ratio, COLOR_LOCUS, COLOR_FWHM, 'z')                                                                # Gaussian: lower ratio = higher conf.
 
 
-def doMove(moveName, distance):
-    if TIMERS:
-        mStart = time.time()
+def doMove(moveName, distance):                                                                                         # perform named move
     if moveName is not None:
-        if moveName == "forward" and (0 <= distance < 10):
+        if moveName == "forward" and (0 <= distance < 10):                                                              # if forward, check there's room:
             print("ERROR: Can't move! No space!!!")
         else:
             crawler.do_action(moveName, 1, SPEED)
-    if TIMERS:
-        mStop = time.time()
-        print("doMove(): %.4f" % (mStop-mStart))
 
 
 if __name__ == "__main__":                                                                                              # do not run on file import
@@ -171,8 +159,6 @@ if __name__ == "__main__":                                                      
     cam.set(4, FEED_RES_H)
     camThread = None                                                                                                    # declare camera thread
     frontDistance = 0.0
-    waitFrames = -1                                                                                                     # dictates when to wait
-    moveFrames = -1                                                                                                     # dictates when to look vs move
     moveStep = -1                                                                                                       # dictates which movement to make
     moveCycle = ["turn left", "turn left", "turn left",
                  "turn right", "turn right", "turn right",
@@ -183,9 +169,6 @@ if __name__ == "__main__":                                                      
     loopCount = 0
     loop = True                                                                                                         # boolean loop variable
     while loop:
-        if TIMERS:
-            start = time.time()
-
         maxConf = 0.0
         minDist = 255
         for i in range(0, LOOK_FRAMES):
@@ -210,11 +193,9 @@ if __name__ == "__main__":                                                      
                         print("Possible goal found! Investigating...\nconfidence = %.3f" % maxConf)
                         doMove("forward", minDist)
                     else:                                                                                               # otherwise, stay and look some more.
-                        # print("Possible goal found! Waiting...\nconfidence = %.3f" % CONFIDENCE)
                         print("Possible goal found! Waiting...\nconfidence = %.3f" % maxConf)
             else:
                 moveStep = (moveStep + 1) % len(moveCycle)                                                              # iterate through moveCycle
-                # while moveCycle[moveStep] == "forward" and 0 <= frontDistance < 10:
                 while moveCycle[moveStep] == "forward" and 0 <= minDist < 10:
                     moveStep = (moveStep + 1) % len(moveCycle)
                 print("Goal not found...\nMovement step %d" % moveStep + ": " + moveCycle[moveStep])
@@ -222,12 +203,6 @@ if __name__ == "__main__":                                                      
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             loop = False
-
-        # time.sleep(HOLD_TIME)                                                                                         # DEPRECATED: force wait each loop
-        if TIMERS:
-            stop = time.time()
-            print("total loop %d:" % loopCount + " %.4f" % (stop - start))
-            loopCount += 1
 
     cam.release()                                                                                                       # safely stop video feed
     cv.destroyAllWindows()                                                                                              # close all opened windows
